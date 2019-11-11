@@ -1,7 +1,7 @@
 /* eslint-disable camelcase */
 process.env.LOG_LEVEL = 'fatal'
 
-const {createRobot} = require('probot')
+const { Application } = require('probot')
 const Stale = require('../lib/stale')
 const notFoundError = {
   code: 404,
@@ -10,11 +10,11 @@ const notFoundError = {
 }
 
 describe('stale', () => {
-  let robot
+  let app
   let github
 
   beforeEach(() => {
-    robot = createRobot()
+    app = new Application()
 
     const issueAction = jest.fn().mockImplementation(() => Promise.resolve(notFoundError))
 
@@ -38,17 +38,17 @@ describe('stale', () => {
     }
 
     // Mock out GitHub client
-    robot.auth = () => Promise.resolve(github)
+    app.auth = () => Promise.resolve(github)
   })
 
   test(
     'removes the stale label and ignores if it has already been removed',
     async () => {
-      let stale = new Stale(github, {perform: true, owner: 'probot', repo: 'stale', logger: robot.log})
+      let stale = new Stale(github, { perform: true, owner: 'probot', repo: 'stale', logger: app.log })
 
       for (const type of ['pulls', 'issues']) {
         try {
-          await stale.unmark(type, {number: 123})
+          await stale.unmarkIssue(type, { number: 123 })
         } catch (_) {
           throw new Error('Should not have thrown an error')
         }
@@ -65,17 +65,17 @@ describe('stale', () => {
 
     const issues = []
     for (let i = 1; i <= issueCount; i++) {
-      const labels = (i <= staleCount) ? [{name: staleLabel}] : []
-      issues.push({number: i, labels: labels})
+      const labels = (i <= staleCount) ? [{ name: staleLabel }] : []
+      issues.push({ number: i, labels: labels })
     }
 
     const prs = []
     for (let i = 101; i <= 100 + issueCount; i++) {
-      const labels = (i <= 100 + staleCount) ? [{name: staleLabel}] : []
-      prs.push({number: i, labels: labels})
+      const labels = (i <= 100 + staleCount) ? [{ name: staleLabel }] : []
+      prs.push({ number: i, labels: labels })
     }
 
-    github.search.issues = ({q, sort, order, per_page}) => {
+    github.search.issues = ({ q, sort, order, per_page }) => {
       let items = []
       if (q.includes('is:pr')) {
         items = items.concat(prs.slice(0, per_page))
@@ -108,21 +108,21 @@ describe('stale', () => {
         comments++
         return Promise.resolve(notFoundError)
       })
-      github.issues.edit = ({owner, repo, number, state}) => {
+      github.issues.edit = ({ owner, repo, number, state }) => {
         if (state === 'closed') {
           closed++
         }
       }
-      github.issues.addLabels = ({owner, repo, number, labels}) => {
+      github.issues.addLabels = ({ owner, repo, number, labels }) => {
         if (labels.includes(staleLabel)) {
           labeledStale++
         }
       }
 
       // Mock out GitHub client
-      robot.auth = () => Promise.resolve(github)
+      app.auth = () => Promise.resolve(github)
 
-      const stale = new Stale(github, {perform: true, owner: 'probot', repo: 'stale', logger: robot.log})
+      const stale = new Stale(github, { perform: true, owner: 'probot', repo: 'stale', logger: app.log })
       stale.config.limitPerRun = limitPerRun
       stale.config.staleLabel = staleLabel
       stale.config.closeComment = 'closed'
@@ -138,13 +138,58 @@ describe('stale', () => {
   test(
     'should not close issues if daysUntilClose is configured as false',
     async () => {
-      let stale = new Stale(github, {perform: true, owner: 'probot', repo: 'stale', logger: robot.log})
+      let stale = new Stale(github, { perform: true, owner: 'probot', repo: 'stale', logger: app.log })
       stale.config.daysUntilClose = false
-      stale.getStale = jest.fn().mockImplementation(() => Promise.resolve({data: {items: []}}))
+      stale.getStale = jest.fn().mockImplementation(() => Promise.resolve({ data: { items: [] } }))
       stale.getClosable = jest.fn()
 
       await stale.markAndSweep('issues')
       expect(stale.getClosable).not.toHaveBeenCalled()
+
+      await stale.markAndSweep('pulls')
+      expect(stale.getClosable).not.toHaveBeenCalled()
+    }
+  )
+
+  test(
+    'should not close issues if the keyword pulls or keyword issues is used, and daysUntilClose is configured as false',
+    async () => {
+      let stale = new Stale(github, { perform: true, owner: 'probot', repo: 'stale', logger: app.log })
+      stale.config.pulls = { daysUntilClose: false }
+      stale.config.issues = { daysUntilClose: false }
+      stale.getStale = jest.fn().mockImplementation(() => Promise.resolve({ data: { items: [] } }))
+      stale.getClosable = jest.fn()
+
+      await stale.markAndSweep('issues')
+      expect(stale.getClosable).not.toHaveBeenCalled()
+
+      await stale.markAndSweep('pulls')
+      expect(stale.getClosable).not.toHaveBeenCalled()
+    }
+  )
+
+  test(
+    'should not close issues if only keyword is configured with the pulls value',
+    async () => {
+      let stale = new Stale(github, { perform: true, owner: 'probot', repo: 'stale', logger: app.log })
+      stale.config.only = 'pulls'
+      stale.config.daysUntilClose = 1
+      stale.getStale = jest.fn().mockImplementation(() => Promise.resolve({ data: { items: [] } }))
+      stale.getClosable = jest.fn()
+
+      await stale.markAndSweep('issues')
+      expect(stale.getClosable).not.toHaveBeenCalled()
+    }
+  )
+
+  test(
+    'should not close pull requests if only keyword is configured with the issues value',
+    async () => {
+      let stale = new Stale(github, { perform: true, owner: 'probot', repo: 'stale', logger: app.log })
+      stale.config.only = 'issues'
+      stale.config.daysUntilClose = 1
+      stale.getStale = jest.fn().mockImplementation(() => Promise.resolve({ data: { items: [] } }))
+      stale.getClosable = jest.fn()
 
       await stale.markAndSweep('pulls')
       expect(stale.getClosable).not.toHaveBeenCalled()
